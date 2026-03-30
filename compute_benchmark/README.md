@@ -1,5 +1,9 @@
 # Deep3D 算力换算工具  
-**RTX 4090 → 端侧 4T 算力  推理速度（FPS）换算标准**
+**源设备 → 端侧 4T 算力  推理速度（FPS）换算标准**
+
+支持两种典型部署场景：
+- **GPU 场景**：RTX 4090（FP16 CUDA 模型）→ 端侧 4T  
+- **CPU 场景**：Intel Xeon Platinum 8470Q 20 vCPU（FP32 CPU 模型）→ 端侧 4T
 
 ---
 
@@ -7,11 +11,12 @@
 
 ```
 compute_benchmark/
-├── benchmark_fps.py       # 在 RTX 4090（或任意 CUDA/CPU 设备）上测量纯推理 FPS
-├── compute_conversion.py  # 基于 Roofline 模型将 RTX 4090 FPS 换算到端侧设备
-├── hardware_specs.py      # 硬件规格数据库（可自行扩展）
-├── run_benchmark.sh       # 一键脚本：测速 + 换算
-└── README.md              # 本文档
+├── benchmark_fps.py           # 在任意 CUDA/CPU 设备上测量纯推理 FPS
+├── compute_conversion.py      # 基于 Roofline 模型将 FPS 换算到端侧设备
+├── hardware_specs.py          # 硬件规格数据库（可自行扩展）
+├── run_benchmark.sh           # 一键脚本（GPU 场景）：RTX 4090 测速 + 换算
+├── run_benchmark_cpu.sh       # 一键脚本（CPU 场景）：Xeon 8470Q 20vCPU 测速 + 换算
+└── README.md                  # 本文档
 ```
 
 ---
@@ -38,6 +43,8 @@ pip install psutil
 
 ## 快速开始（一键运行）
 
+### GPU 场景（RTX 4090 + CUDA 模型）
+
 ```bash
 cd compute_benchmark
 bash run_benchmark.sh ../export/deep3d_v1.0_640x360_cuda.pt
@@ -50,9 +57,27 @@ bash run_benchmark.sh ../export/deep3d_v1.0_640x360_cuda.pt
 
 ---
 
+### CPU 场景（Intel Xeon Platinum 8470Q 20 vCPU + CPU 模型）
+
+```bash
+cd compute_benchmark
+bash run_benchmark_cpu.sh /root/autodl-tmp/deep3d_22/export/deep3d_v1.0_1280x720_cpu.pt
+```
+
+脚本会依次执行：
+1. 在 CPU（20 vCPU Xeon 8470Q）上以 FP32 测量推理 FPS，结果写入 `cpu_benchmark.json`  
+2. 换算到 **端侧 4T INT8**（AI 芯片 / NPU），结果写入 `cpu_conversion_Edge-4T-INT8.json`  
+3. 换算到 **端侧 4T FP32**（通用处理器 / 移动 GPU），结果写入 `cpu_conversion_Edge-4T-FP32.json`
+
+> **注意**：CPU 推理 1280×720 帧速度较慢，每次 forward pass 可能需要数秒。
+> 默认参数（warmup=5, iterations=30）下总耗时约 2–10 分钟。
+> 可按需调整：`bash run_benchmark_cpu.sh <model> <warmup> <iterations>`
+
+---
+
 ## 步骤详解
 
-### Step 1：在 RTX 4090 上测量 FPS
+### Step 1：在 RTX 4090 上测量 FPS（GPU 场景）
 
 ```bash
 python benchmark_fps.py \
@@ -139,6 +164,94 @@ python compute_conversion.py \
 
 ---
 
+## CPU 场景专项步骤（Xeon 8470Q 20vCPU → 端侧 4T）
+
+### Step A：在 Xeon 8470Q 20vCPU 上测量 FPS
+
+```bash
+python benchmark_fps.py \
+    --model   /root/autodl-tmp/deep3d_22/export/deep3d_v1.0_1280x720_cpu.pt \
+    --gpu_id  -1       \
+    --warmup  5        \
+    --iterations 30    \
+    --output  cpu_benchmark.json
+```
+
+| 参数 | 建议值 | 说明 |
+|------|--------|------|
+| `--model` | `deep3d_v1.0_1280x720_cpu.pt` | CPU TorchScript 模型，文件名含 `1280x720` |
+| `--gpu_id` | **`-1`** | **必须设为 -1，强制 CPU 推理** |
+| `--warmup` | `5` | CPU 推理速度慢，5 次预热即可 |
+| `--iterations` | `30` | 30 次正式计时，节省时间 |
+| `--output` | `cpu_benchmark.json` | 结果 JSON 供下一步读取 |
+
+**输出示例：**
+```
+Device   : CPU
+Resolution (model input): 1280x720
+Precision: FP32
+
+Benchmark Results
+═══════════════════════════════════════════════════════
+  FPS  mean  : 0.42
+  FPS  median: 0.43
+  FPS  P5–P95: 0.39 – 0.45
+  Latency ms : 2381.54 (mean)  2542.10 (P95)
+```
+
+> 实际数值取决于并发负载和 CPU 频率状态。建议在专用实例上、低系统负载时运行。
+
+---
+
+### Step B：CPU → 端侧 4T 换算
+
+```bash
+# 换算到 端侧 4T INT8（AI 芯片 / NPU）
+python compute_conversion.py \
+    --benchmark_json cpu_benchmark.json \
+    --src  "Xeon-8470Q-20vCPU"  \
+    --dst  "Edge-4T-INT8"        \
+    --precision fp32              \
+    --output_json cpu_conversion_Edge-4T-INT8.json
+
+# 换算到 端侧 4T FP32（通用处理器 / 移动 GPU）
+python compute_conversion.py \
+    --benchmark_json cpu_benchmark.json \
+    --src  "Xeon-8470Q-20vCPU"  \
+    --dst  "Edge-4T-FP32"        \
+    --precision fp32              \
+    --output_json cpu_conversion_Edge-4T-FP32.json
+```
+
+**输出示例（以 FPS=0.42 为例）：**
+```
+══════════════════════════════════════════════════════════════
+  FPS Conversion:  Xeon-8470Q-20vCPU  →  Edge-4T-INT8
+══════════════════════════════════════════════════════════════
+  源硬件 (Source) : Intel Xeon Platinum 8470Q 20 vCPU (Sapphire Rapids, ~10 phys. cores, 2.0 GHz base)
+  目标硬件 (Target): 端侧 4 TOPS INT8 算力 (AI 芯片/NPU), ~30 GB/s LPDDR4
+  推理精度 (Precision): FP32
+  测量 FPS (Xeon-8470Q-20vCPU): 0.42
+
+  换算因子 (Conversion factors):
+    算力比 (Compute ratio)  : 1.5625  (1.00 / 0.64 TFLOPS)
+    带宽比 (Bandwidth ratio): 0.5859  (30.0 / 51.2 GB/s)
+    瓶颈   (Bottleneck)     : BANDWIDTH-bound
+
+  预估端侧 FPS (Estimated edge FPS):
+    保守 Conservative (瓶颈限制)     :    0.25 FPS
+    适中 Moderate     (几何平均)      :    0.46 FPS  ← 推荐参考值
+    乐观 Optimistic   (理论最优)      :    0.66 FPS
+```
+
+> 换算结果的物理含义：若端侧 4T AI 芯片直接运行相同 FP32 模型，推理速度与 Xeon 20vCPU 相当甚至更低。
+> 但端侧芯片通常配合 **INT8 量化 + 专用 SDK（TensorRT / ONNX Runtime EP）**，
+> 实际 FPS 可提升 **4–8×**，即约 **1–3 FPS**（以 0.42 FPS × 4–8 粗略估算）。
+> **注意**：4–8× 为行业典型参考范围，实际加速倍数取决于模型结构、量化精度损失、
+> SDK 优化质量及硬件驱动版本，可能显著偏离此范围，建议在目标硬件上实测验证。
+
+---
+
 ## 支持的硬件配置
 
 | 名称 | 描述 |
@@ -146,6 +259,7 @@ python compute_conversion.py \
 | `RTX 4090` | NVIDIA GeForce RTX 4090, 165.2 TFLOPS FP16, 1008 GB/s |
 | `RTX 3090` | NVIDIA GeForce RTX 3090, 71.2 TFLOPS FP16, 936 GB/s |
 | `RTX 2080 Ti` | NVIDIA GeForce RTX 2080 Ti, 26.9 TFLOPS FP16, 616 GB/s |
+| `Xeon-8470Q-20vCPU` | Intel Xeon Platinum 8470Q 20 vCPU，0.64 TFLOPS FP32，51.2 GB/s DDR5 |
 | `Edge-4T-INT8` | 端侧 4 TOPS INT8（AI 芯片 / NPU），30 GB/s |
 | `Edge-4T-FP32` | 端侧 4 TFLOPS FP32（通用处理器 / 移动 GPU），51.2 GB/s |
 | `RK3588-NPU` | Rockchip RK3588 NPU，6 TOPS INT8，51.2 GB/s |

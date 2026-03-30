@@ -84,4 +84,26 @@ HARDWARE_DB = {
         "memory_gb":       4.0,
         "description": "NVIDIA Jetson Nano (472 GFLOPS, Maxwell arch — no native FP16 acceleration, 25.6 GB/s LPDDR4)",
     },
+
+    # ── CPU server / cloud instances ──────────────────────────────────────────
+    # Intel Xeon Platinum 8470Q (Sapphire Rapids, 2023) — 20 vCPU cloud instance
+    #   Physical cores mapped to 20 vCPU: ~10 physical cores (2:1 vCPU:pCPU)
+    #   Base clock: 2.0 GHz  |  Max Turbo: 3.8 GHz  |  AVX-512 + BF16 + VNNI
+    #   FP32 peak (conservative): 10 cores × 16 FP32/cycle (1 AVX-512 FMA) × 2.0 GHz = 0.32 TFLOPS
+    #   FP32 peak (theoretical):  10 cores × 32 FLOP/cycle (2 AVX-512 FMA) × 2.0 GHz = 0.64 TFLOPS
+    #   BF16/FP16 (AVX-512 BF16): ~2× FP32 → 1.28 TFLOPS
+    #   INT8 (VNNI): ~4× FP32 → 2.56 TOPS
+    #   Memory bandwidth: estimated proportional share of 8-channel DDR5-4800 (~307 GB/s total)
+    #     Full chip (52 cores): 8 ch × 4800 MT/s × 8 B ≈ 307 GB/s
+    #     Proportional (10/52 cores): 307 × (10/52) ≈ 59 GB/s
+    #     Using 51.2 GB/s as a conservative estimate to account for NUMA latency,
+    #     hypervisor overhead, and memory contention typical in cloud VMs.
+    "Xeon-8470Q-20vCPU": {
+        "fp32_tflops":   0.64,   # 10 phys. cores × 32 FLOP/cycle × 2.0 GHz (dual AVX-512 FMA theoretical peak)
+        "fp16_tflops":   1.28,   # AVX-512 BF16 acceleration (2× FP32)
+        "int8_tops":     2.56,   # VNNI INT8 acceleration (4× FP32)
+        "bandwidth_gbs":  51.2,  # estimated proportional DDR5-4800 share for ~10 physical cores
+        "memory_gb":      40.0,  # typical autodl cloud instance with 20 vCPU
+        "description": "Intel Xeon Platinum 8470Q 20 vCPU (Sapphire Rapids, ~10 phys. cores, 2.0 GHz base, AVX-512 BF16/VNNI)",
+    },
 }
